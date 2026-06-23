@@ -7,17 +7,18 @@ import websockets
 
 # ======================= CONFIGURATION =======================
 # Modifie cette liste pour choisir tes marchés et intervalles.
-# symbol : code Deriv (ex: "frxEURUSD", "frxXAUUSD"=or, "BTCUSD", "R_100"...)
+# symbol : code Deriv (ex: "frxEURUSD", "frxXAUUSD"=or, "cryBTCUSD", "R_100"...)
 # granularity : taille de la bougie en secondes
 #   60=1min, 300=5min, 900=15min, 1800=30min, 3600=1h, 14400=4h, 86400=1jour
 WATCHLIST = [
     {"symbol": "frxEURUSD", "granularity": 1800},
     {"symbol": "frxXAUUSD", "granularity": 1800},
-    {"symbol": "BTCUSD", "granularity": 1800},
+    {"symbol": "cryBTCUSD", "granularity": 1800},
 ]
 
 EMA_PERIODS = [20, 50, 200]
-HISTORY_COUNT = 300  # nombre de bougies utilisées pour le calcul des EMA
+HISTORY_COUNT = 600  # nombre de bougies utilisées pour le calcul des EMA
+# (marge large pour absorber les coupures de marche le week-end sur le forex)
 
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
 DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
@@ -100,7 +101,8 @@ async def check_symbol(item, state):
     try:
         candles = await fetch_candles(symbol, granularity, HISTORY_COUNT)
     except Exception as e:
-        print(f"[{symbol}] Erreur récupération des bougies: {e}")
+        err_text = str(e) or type(e).__name__
+        print(f"[{symbol}] Erreur récupération des bougies: {err_text}")
         return
 
     if len(candles) < max(EMA_PERIODS) + 2:
