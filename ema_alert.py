@@ -20,7 +20,7 @@ EMA_PERIODS = [20, 50, 200]
 HISTORY_COUNT = 300  # nombre de bougies utilisées pour le calcul des EMA
 
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
-DERIV_WS_URL = f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
+DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
