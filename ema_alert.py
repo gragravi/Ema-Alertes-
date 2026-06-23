@@ -1,45 +1,84 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import requests
 import websockets
 
 # ======================= CONFIGURATION =======================
-# Modifie cette liste pour choisir tes marchés et intervalles.
-# symbol : code Deriv (ex: "frxEURUSD", "frxXAUUSD"=or, "cryBTCUSD", "R_100"...)
-# granularity : taille de la bougie en secondes
-#   60=1min, 300=5min, 900=15min, 1800=30min, 3600=1h, 14400=4h, 86400=1jour
-WATCHLIST = [
-    {"symbol": "frxEURUSD", "granularity": 1800},
-    {"symbol": "frxXAUUSD", "granularity": 1800},
-    {"symbol": "cryBTCUSD", "granularity": 1800},
-]
+# Watchlist par defaut utilisee uniquement la toute premiere fois
+# (ensuite tout se gere depuis Telegram avec /add, /remove, /list)
+DEFAULT_WATCHLIST = ["frxEURUSD", "frxXAUUSD", "cryBTCUSD"]
 
 EMA_PERIODS = [20, 50, 200]
-HISTORY_COUNT = 600  # nombre de bougies utilisées pour le calcul des EMA
-# (marge large pour absorber les coupures de marche le week-end sur le forex)
+
+# Tous les intervalles verifies automatiquement, pour chaque symbole suivi
+GRANULARITIES = [
+    (60, "1min"),
+    (300, "5min"),
+    (900, "15min"),
+    (1800, "30min"),
+    (3600, "1h"),
+    (14400, "4h"),
+    (86400, "1j"),
+]
 
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
-DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+DERIV_WS_URL = f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Fuseau horaire utilise pour afficher l'heure dans les alertes
+LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "Europe/Paris")
 # ===============================================================
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
+BASE_DIR = os.path.dirname(__file__)
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+STATE_FILE = os.path.join(BASE_DIR, "state.json")
+
+HELP_TEXT = (
+    "Commandes disponibles :\n"
+    "/list - afficher les symboles suivis\n"
+    "/add SYMBOLE - ajouter un symbole (ex: /add frxGBPUSD)\n"
+    "/remove SYMBOLE - retirer un symbole\n"
+    "/help - afficher ce message\n\n"
+    "Tous les intervalles (1min, 5min, 15min, 30min, 1h, 4h, 1j) sont "
+    "surveilles automatiquement pour chaque symbole de la liste."
+)
+
+
+def load_json(path, default):
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return default
+
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def load_config():
+    config = load_json(CONFIG_FILE, {})
+    config.setdefault("symbols", list(DEFAULT_WATCHLIST))
+    config.setdefault("last_update_id", 0)
+    return config
+
+
+def save_config(config):
+    save_json(CONFIG_FILE, config)
 
 
 def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
+    return load_json(STATE_FILE, {})
 
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    save_json(STATE_FILE, state)
 
 
 def send_telegram(message: str):
@@ -56,6 +95,69 @@ def send_telegram(message: str):
         print("[Telegram] Exception:", e)
 
 
+def get_telegram_updates(offset):
+    if not TELEGRAM_BOT_TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        r = requests.get(url, params={"offset": offset, "timeout": 0}, timeout=10)
+        data = r.json()
+        if data.get("ok"):
+            return data.get("result", [])
+    except Exception as e:
+        print("[Telegram] Erreur getUpdates:", e)
+    return []
+
+
+def process_commands(config):
+    """Lit les messages Telegram recus depuis la derniere fois et met a jour
+    la watchlist en fonction des commandes /add, /remove, /list, /help."""
+    updates = get_telegram_updates(config["last_update_id"] + 1)
+
+    for update in updates:
+        config["last_update_id"] = update["update_id"]
+        message = update.get("message", {})
+        text = (message.get("text") or "").strip()
+        if not text:
+            continue
+
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        if TELEGRAM_CHAT_ID and chat_id != str(TELEGRAM_CHAT_ID):
+            continue  # on ignore les messages d'un autre chat
+
+        parts = text.split()
+        cmd = parts[0].lower()
+
+        if cmd in ("/start", "/help"):
+            send_telegram(HELP_TEXT)
+
+        elif cmd == "/list":
+            symbols = config["symbols"]
+            if symbols:
+                send_telegram("Symboles suivis :\n" + "\n".join(f"- {s}" for s in symbols))
+            else:
+                send_telegram("Aucun symbole suivi actuellement.")
+
+        elif cmd == "/add" and len(parts) >= 2:
+            symbol = parts[1].strip()
+            if symbol not in config["symbols"]:
+                config["symbols"].append(symbol)
+                send_telegram(f"✅ {symbol} ajouté à la watchlist.")
+            else:
+                send_telegram(f"{symbol} est déjà suivi.")
+
+        elif cmd == "/remove" and len(parts) >= 2:
+            symbol = parts[1].strip()
+            if symbol in config["symbols"]:
+                config["symbols"].remove(symbol)
+                send_telegram(f"🗑️ {symbol} retiré de la watchlist.")
+            else:
+                send_telegram(f"{symbol} n'est pas dans la watchlist.")
+
+        else:
+            send_telegram("Commande non reconnue.\n\n" + HELP_TEXT)
+
+
 def compute_ema(closes, period):
     if len(closes) < period:
         return None
@@ -66,12 +168,20 @@ def compute_ema(closes, period):
     return ema_val
 
 
-def granularity_label(seconds):
-    if seconds % 86400 == 0 and seconds >= 86400:
-        return f"{seconds // 86400}j"
-    if seconds % 3600 == 0 and seconds >= 3600:
-        return f"{seconds // 3600}h"
-    return f"{seconds // 60}min"
+def history_count_for(granularity):
+    # Marge large pour absorber les coupures de marche le week-end (forex)
+    if granularity >= 86400:
+        return 400
+    return 600
+
+
+def format_local_time(epoch_seconds):
+    dt_utc = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+    try:
+        local_dt = dt_utc.astimezone(ZoneInfo(LOCAL_TIMEZONE))
+    except Exception:
+        local_dt = dt_utc + timedelta(hours=2)
+    return local_dt.strftime("%d/%m %H:%M")
 
 
 async def fetch_candles(symbol, granularity, count):
@@ -85,7 +195,7 @@ async def fetch_candles(symbol, granularity, count):
         }
         await ws.send(json.dumps(request))
         while True:
-            raw = await asyncio.wait_for(ws.recv(), timeout=15)
+            raw = await asyncio.wait_for(ws.recv(), timeout=20)
             data = json.loads(raw)
             if data.get("msg_type") == "candles":
                 return data["candles"]
@@ -93,24 +203,19 @@ async def fetch_candles(symbol, granularity, count):
                 raise RuntimeError(data["error"].get("message", "Erreur Deriv"))
 
 
-async def check_symbol(item, state):
-    symbol = item["symbol"]
-    granularity = item["granularity"]
-    label = granularity_label(granularity)
-
+async def check_symbol_granularity(symbol, granularity, label, state):
+    count = history_count_for(granularity)
     try:
-        candles = await fetch_candles(symbol, granularity, HISTORY_COUNT)
+        candles = await fetch_candles(symbol, granularity, count)
     except Exception as e:
         err_text = str(e) or type(e).__name__
-        print(f"[{symbol}] Erreur récupération des bougies: {err_text}")
+        print(f"[{symbol} {label}] Erreur récupération des bougies: {err_text}")
         return
 
     if len(candles) < max(EMA_PERIODS) + 2:
-        print(f"[{symbol}] Pas assez d'historique pour calculer les EMA.")
+        print(f"[{symbol} {label}] Pas assez d'historique pour calculer les EMA.")
         return
 
-    # On retire la bougie en cours de formation (la dernière), on ne garde
-    # que les bougies déjà fermées pour un calcul fiable.
     closed_candles = candles[:-1]
     last_closed = closed_candles[-1]
     closes = [float(c["close"]) for c in closed_candles]
@@ -118,6 +223,7 @@ async def check_symbol(item, state):
     epoch = int(last_closed["epoch"])
     high = float(last_closed["high"])
     low = float(last_closed["low"])
+    time_str = format_local_time(epoch)
 
     for period in EMA_PERIODS:
         ema_val = compute_ema(closes, period)
@@ -130,7 +236,7 @@ async def check_symbol(item, state):
 
         if touched and already_alerted_epoch != epoch:
             msg = (
-                f"🔔 {symbol} ({label})\n"
+                f"🔔 {symbol} ({label}) - {time_str}\n"
                 f"Le prix a touché l'EMA {period} (~{ema_val:.5f})"
             )
             print(msg)
@@ -139,11 +245,18 @@ async def check_symbol(item, state):
 
 
 async def main():
+    config = load_config()
     state = load_state()
-    for item in WATCHLIST:
-        await check_symbol(item, state)
-        await asyncio.sleep(0.5)
+
+    process_commands(config)
+
+    for symbol in config["symbols"]:
+        for granularity, label in GRANULARITIES:
+            await check_symbol_granularity(symbol, granularity, label, state)
+            await asyncio.sleep(0.3)
+
     save_state(state)
+    save_config(config)
 
 
 if __name__ == "__main__":
