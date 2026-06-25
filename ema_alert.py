@@ -9,15 +9,12 @@ import websockets
 
 # ======================= CONFIGURATION =======================
 # Watchlist par defaut utilisee uniquement la toute premiere fois
-# (ensuite tout se gere depuis Telegram avec /add, /remove, /list)
-DEFAULT_WATCHLIST = ["frxEURUSD", "frxXAUUSD", "cryBTCUSD"]
+DEFAULT_WATCHLIST = ["frxXAUUSD", "OTC_NDX", "frxAUDUSD", "frxEURUSD", "cryBTCUSD"]
 
 EMA_PERIODS = [20, 50, 200]
 
 # Tous les intervalles verifies automatiquement, pour chaque symbole suivi
 GRANULARITIES = [
-    (60, "1min"),
-    (300, "5min"),
     (900, "15min"),
     (1800, "30min"),
     (3600, "1h"),
@@ -32,7 +29,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # Fuseau horaire utilise pour afficher l'heure dans les alertes
-LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "Europe/Paris")
+LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "UTC")
 # ===============================================================
 
 BASE_DIR = os.path.dirname(__file__)
