@@ -1,1 +1,10 @@
-{}
+{
+  "symbols": [
+    "frxXAUUSD",
+    "OTC_NDX",
+    "frxAUDUSD",
+    "frxEURUSD",
+    "cryBTCUSD"
+  ],
+  "last_update_id": 0
+}
