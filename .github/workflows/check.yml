@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ema-alert-bot
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
