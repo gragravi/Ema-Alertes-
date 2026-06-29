@@ -38,3 +38,7 @@ jobs:
           git add state.json config.json
           git diff --cached --quiet || git commit -m "Update state [skip ci]"
           git push
+          git config user.email "ema-bot@users.noreply.github.com"
+          git add state.json config.json
+          git diff --cached --quiet || git commit -m "Update state [skip ci]"
+          git push
