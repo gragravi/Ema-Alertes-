@@ -1,11 +1,15 @@
 {
-  "alerts": [],
-  "next_alert_id": 1,
-  "last_update_id": 364729630,
-  "pending": {
-    "step": "ema",
-    "symbol": "frxXAUUSD",
-    "granularity": 1800,
-    "label": "30min"
-  }
+  "alerts": [
+    {
+      "id": 1,
+      "symbol": "frxXAUUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
+    }
+  ],
+  "next_alert_id": 2,
+  "last_update_id": 364729631,
+  "pending": null
 }
