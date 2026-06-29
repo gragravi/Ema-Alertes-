@@ -1,24 +1,6 @@
 {
-  "symbols": [
-    "frxXAUUSD",
-    "OTC_NDX",
-    "frxAUDUSD",
-    "frxEURUSD",
-    "cryBTCUSD",
-    "STPINDEX"
-  ],
-  "granularity_labels": [
-    "30min",
-    "1h",
-    "4h",
-    "1j"
-  ],
-  "ema_periods": [
-    20,
-    50,
-    200
-  ],
-  "last_update_id": 364729616,
   "alerts": [],
-  "next_alert_id": 1
+  "next_alert_id": 1,
+  "last_update_id": 0,
+  "pending": null
 }
