@@ -1,0 +1,769 @@
+"""
+Bot d'alertes EMA (Deriv + Telegram) — V2
+
+Architecture V2 : chaque alerte est une combinaison indépendante
+(1 symbole + 1 intervalle + 1 EMA). La configuration ne contient plus
+qu'une liste d'alertes (voir config.json).
+
+Le fichier est volontairement laissé en un seul script (pour rester
+simple à déployer via GitHub Actions), mais le code est organisé en
+modules logiques clairement séparés par des sections :
+
+    1. CONFIGURATION GENERALE
+    2. PERSISTANCE (config.json / state.json)
+    3. MODULE TELEGRAM (API bas niveau + claviers à boutons)
+    4. MODULE ALERTES (CRUD sur la liste d'alertes)
+    5. MODULE COMMANDES TELEGRAM (messages + boutons -> actions)
+    6. MODULE DERIV (récupération des bougies)
+    7. MODULE ETAT (state.json)
+    8. UTILITAIRES (EMA, formatage de date)
+    9. MOTEUR DE VERIFICATION DES ALERTES
+   10. BOUCLE PRINCIPALE
+"""
+
+import asyncio
+import json
+import os
+import tempfile
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+import requests
+import websockets
+
+# ===================================================================
+# 1. CONFIGURATION GENERALE
+# ===================================================================
+
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
+DERIV_WS_URL = f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# Fuseau horaire utilisé pour afficher l'heure dans les alertes.
+LOCAL_TIMEZONE = os.getenv("LOCAL_TIMEZONE", "UTC")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+STATE_FILE = os.path.join(BASE_DIR, "state.json")
+
+# Symboles proposés dans le menu /new (label affiché -> code Deriv).
+# Pour ajouter un symbole, ajoute simplement une ligne ici.
+AVAILABLE_SYMBOLS = [
+    ("EUR/USD", "frxEURUSD"),
+    ("GBP/USD", "frxGBPUSD"),
+    ("AUD/USD", "frxAUDUSD"),
+    ("USD/JPY", "frxUSDJPY"),
+    ("Or (XAU/USD)", "frxXAUUSD"),
+    ("Argent (XAG/USD)", "frxXAGUSD"),
+    ("BTC/USD", "cryBTCUSD"),
+    ("ETH/USD", "cryETHUSD"),
+    ("US Tech 100", "OTC_NDX"),
+    ("Step Index", "STPINDEX"),
+    ("Boom 1000", "BOOM1000"),
+    ("Crash 1000", "CRASH1000"),
+]
+SYMBOL_CODE_TO_LABEL = {code: label for label, code in AVAILABLE_SYMBOLS}
+
+# Granularités proposées dans le menu /new (label -> secondes).
+ALLOWED_GRANULARITIES = {
+    "1min": 60,
+    "5min": 300,
+    "15min": 900,
+    "30min": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1j": 86400,
+}
+SECONDS_TO_LABEL = {v: k for k, v in ALLOWED_GRANULARITIES.items()}
+
+# Périodes EMA proposées dans le menu /new.
+AVAILABLE_EMA_PERIODS = [9, 20, 50, 100, 200]
+
+HELP_TEXT = (
+    "🤖 Gestionnaire d'alertes EMA\n\n"
+    "Chaque alerte surveille UNE combinaison : un symbole, un intervalle "
+    "et une EMA.\n\n"
+    "📌 Alertes\n"
+    "/new — créer une nouvelle alerte (par boutons)\n"
+    "/alerts — lister toutes les alertes\n"
+    "/pause ID — mettre une alerte en pause (ex: /pause 3)\n"
+    "/resume ID — réactiver une alerte (ex: /resume 3)\n"
+    "/delete ID — supprimer une alerte (confirmation demandée)\n\n"
+    "⚙️ Divers\n"
+    "/help — afficher ce message"
+)
+
+# ===================================================================
+# 2. PERSISTANCE (config.json / state.json)
+# ===================================================================
+
+
+def load_json(path, default):
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[Persistance] Fichier corrompu {path}, réinitialisation : {e}")
+    return default
+
+
+def save_json(path, data):
+    dir_ = os.path.dirname(path) or "."
+    with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp") as tmp:
+        json.dump(data, tmp, indent=2, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, path)
+
+
+def load_config():
+    config = load_json(CONFIG_FILE, {})
+    config.setdefault("alerts", [])
+    config.setdefault("next_alert_id", 1)
+    config.setdefault("last_update_id", 0)
+    # "pending" mémorise où en est l'utilisateur dans le flux /new
+    # (choix du symbole -> de l'intervalle -> de l'EMA), car chaque
+    # appui sur un bouton arrive dans une exécution séparée du script.
+    config.setdefault("pending", None)
+    return config
+
+
+def save_config(config):
+    save_json(CONFIG_FILE, config)
+
+
+def load_state():
+    return load_json(STATE_FILE, {})
+
+
+def save_state(state):
+    save_json(STATE_FILE, state)
+
+
+# ===================================================================
+# 3. MODULE TELEGRAM (API bas niveau + claviers à boutons)
+# ===================================================================
+
+
+def send_telegram(text, reply_markup=None):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[Telegram] TELEGRAM_BOT_TOKEN/CHAT_ID manquant. Message non envoyé:")
+        print(text)
+        return None
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    try:
+        r = requests.post(url, data=payload, timeout=10)
+        data = r.json()
+        if not data.get("ok"):
+            print("[Telegram] Erreur d'envoi:", r.text)
+            return None
+        return data["result"]
+    except Exception as e:
+        print("[Telegram] Exception sendMessage:", e)
+        return None
+
+
+def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    try:
+        r = requests.post(url, data=payload, timeout=10)
+        if not r.json().get("ok"):
+            print("[Telegram] Erreur editMessageText:", r.text)
+    except Exception as e:
+        print("[Telegram] Exception editMessageText:", e)
+
+
+def answer_callback_query(callback_query_id, text=None):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    try:
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print("[Telegram] Exception answerCallbackQuery:", e)
+
+
+def get_telegram_updates(offset):
+    if not TELEGRAM_BOT_TOKEN:
+        return []
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        r = requests.get(
+            url,
+            params={
+                "offset": offset,
+                "timeout": 0,
+                "allowed_updates": json.dumps(["message", "callback_query"]),
+            },
+            timeout=10,
+        )
+        data = r.json()
+        if data.get("ok"):
+            return data.get("result", [])
+    except Exception as e:
+        print("[Telegram] Erreur getUpdates:", e)
+    return []
+
+
+def chunk_buttons(buttons, per_row=2):
+    """Découpe une liste de boutons inline en rangées de `per_row`."""
+    return [buttons[i : i + per_row] for i in range(0, len(buttons), per_row)]
+
+
+def keyboard_symbols():
+    buttons = [
+        {"text": label, "callback_data": f"new:symbol:{code}"}
+        for label, code in AVAILABLE_SYMBOLS
+    ]
+    rows = chunk_buttons(buttons, 2)
+    rows.append([{"text": "❌ Annuler", "callback_data": "new:cancel"}])
+    return {"inline_keyboard": rows}
+
+
+def keyboard_granularities():
+    buttons = [
+        {"text": label, "callback_data": f"new:gran:{seconds}:{label}"}
+        for label, seconds in ALLOWED_GRANULARITIES.items()
+    ]
+    rows = chunk_buttons(buttons, 3)
+    rows.append([{"text": "❌ Annuler", "callback_data": "new:cancel"}])
+    return {"inline_keyboard": rows}
+
+
+def keyboard_emas():
+    buttons = [
+        {"text": f"EMA {p}", "callback_data": f"new:ema:{p}"}
+        for p in AVAILABLE_EMA_PERIODS
+    ]
+    rows = chunk_buttons(buttons, 3)
+    rows.append([{"text": "❌ Annuler", "callback_data": "new:cancel"}])
+    return {"inline_keyboard": rows}
+
+
+def keyboard_confirm_delete(alert_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Confirmer", "callback_data": f"del:confirm:{alert_id}"},
+                {"text": "❌ Annuler", "callback_data": f"del:cancel:{alert_id}"},
+            ]
+        ]
+    }
+
+
+# ===================================================================
+# 4. MODULE ALERTES (CRUD sur config["alerts"])
+# ===================================================================
+
+
+def find_alert(config, alert_id):
+    for alert in config["alerts"]:
+        if alert["id"] == alert_id:
+            return alert
+    return None
+
+
+def alert_already_exists(config, symbol, granularity, ema):
+    """Empêche de créer deux fois la même combinaison
+    symbole + intervalle + EMA (même si l'une des deux est en pause)."""
+    for alert in config["alerts"]:
+        if (
+            alert["symbol"] == symbol
+            and alert["granularity"] == granularity
+            and alert["ema"] == ema
+        ):
+            return True
+    return False
+
+
+def create_alert(config, symbol, granularity, label, ema):
+    if alert_already_exists(config, symbol, granularity, ema):
+        return None
+    alert = {
+        "id": config["next_alert_id"],
+        "symbol": symbol,
+        "granularity": granularity,
+        "label": label,
+        "ema": ema,
+        "enabled": True,
+    }
+    config["alerts"].append(alert)
+    config["next_alert_id"] += 1
+    return alert
+
+
+def delete_alert(config, alert_id):
+    alert = find_alert(config, alert_id)
+    if alert is None:
+        return None
+    config["alerts"] = [a for a in config["alerts"] if a["id"] != alert_id]
+    return alert
+
+
+def set_alert_enabled(config, alert_id, enabled):
+    alert = find_alert(config, alert_id)
+    if alert is None:
+        return None
+    alert["enabled"] = enabled
+    return alert
+
+
+def symbol_display_name(symbol):
+    return SYMBOL_CODE_TO_LABEL.get(symbol, symbol)
+
+
+def format_alert_line(alert):
+    status = "✅" if alert.get("enabled", True) else "⏸"
+    return (
+        f"#{alert['id']} {symbol_display_name(alert['symbol'])} • "
+        f"{alert['label']} • EMA{alert['ema']} {status}"
+    )
+
+
+def format_alerts_list(config):
+    alerts = config["alerts"]
+    if not alerts:
+        return "Aucune alerte configurée. Utilise /new pour en créer une."
+    alerts_sorted = sorted(alerts, key=lambda a: a["id"])
+    return "📋 Alertes\n\n" + "\n".join(format_alert_line(a) for a in alerts_sorted)
+
+
+# ===================================================================
+# 5. MODULE COMMANDES TELEGRAM (messages + boutons -> actions)
+# ===================================================================
+
+
+def is_authorized_chat(chat_id):
+    if not TELEGRAM_CHAT_ID:
+        # Pas de chat_id configuré -> on ne peut authentifier personne,
+        # donc on ignore toute commande par sécurité (au lieu de les
+        # accepter de n'importe qui).
+        print("[Telegram] TELEGRAM_CHAT_ID non configuré, commande ignorée par sécurité.")
+        return False
+    return str(chat_id) == str(TELEGRAM_CHAT_ID)
+
+
+def start_new_alert_flow(config):
+    config["pending"] = {"step": "symbol"}
+    send_telegram(
+        "➕ Nouvelle alerte\n\n1/3 — Choisis un symbole :",
+        reply_markup=keyboard_symbols(),
+    )
+
+
+def handle_text_command(config, text):
+    parts = text.split()
+    cmd = parts[0].lower()
+
+    if cmd in ("/start", "/help"):
+        send_telegram(HELP_TEXT)
+
+    elif cmd == "/new":
+        start_new_alert_flow(config)
+
+    elif cmd == "/alerts":
+        send_telegram(format_alerts_list(config))
+
+    elif cmd == "/pause":
+        if len(parts) < 2:
+            send_telegram("❌ Précise l'ID de l'alerte. Exemple : /pause 3")
+        else:
+            try:
+                alert_id = int(parts[1])
+            except ValueError:
+                send_telegram("❌ Format invalide. Exemple : /pause 3")
+            else:
+                alert = find_alert(config, alert_id)
+                if alert is None:
+                    send_telegram(f"❌ Alerte #{alert_id} introuvable.")
+                elif not alert.get("enabled", True):
+                    send_telegram(f"⏸ L'alerte #{alert_id} est déjà en pause.")
+                else:
+                    set_alert_enabled(config, alert_id, False)
+                    send_telegram(f"⏸ Alerte #{alert_id} mise en pause.")
+
+    elif cmd == "/resume":
+        if len(parts) < 2:
+            send_telegram("❌ Précise l'ID de l'alerte. Exemple : /resume 3")
+        else:
+            try:
+                alert_id = int(parts[1])
+            except ValueError:
+                send_telegram("❌ Format invalide. Exemple : /resume 3")
+            else:
+                alert = find_alert(config, alert_id)
+                if alert is None:
+                    send_telegram(f"❌ Alerte #{alert_id} introuvable.")
+                elif alert.get("enabled", True):
+                    send_telegram(f"✅ L'alerte #{alert_id} est déjà active.")
+                else:
+                    set_alert_enabled(config, alert_id, True)
+                    send_telegram(f"▶️ Alerte #{alert_id} réactivée.")
+
+    elif cmd == "/delete":
+        if len(parts) < 2:
+            send_telegram("❌ Précise l'ID de l'alerte. Exemple : /delete 3")
+        else:
+            try:
+                alert_id = int(parts[1])
+            except ValueError:
+                send_telegram("❌ Format invalide. Exemple : /delete 3")
+            else:
+                alert = find_alert(config, alert_id)
+                if alert is None:
+                    send_telegram(f"❌ Alerte #{alert_id} introuvable.")
+                else:
+                    send_telegram(
+                        f"⚠️ Supprimer définitivement cette alerte ?\n\n{format_alert_line(alert)}",
+                        reply_markup=keyboard_confirm_delete(alert_id),
+                    )
+
+    else:
+        send_telegram("Commande non reconnue.\n\n" + HELP_TEXT)
+
+
+def handle_new_alert_callback(config, chat_id, message_id, data_parts):
+    pending = config.get("pending") or {}
+    action = data_parts[1] if len(data_parts) > 1 else ""
+
+    if action == "cancel":
+        config["pending"] = None
+        edit_telegram_message(chat_id, message_id, "❌ Création d'alerte annulée.")
+        return
+
+    if action == "symbol" and len(data_parts) >= 3:
+        if pending.get("step") not in (None, "symbol"):
+            edit_telegram_message(chat_id, message_id, "⚠️ Session expirée, relance /new.")
+            config["pending"] = None
+            return
+        symbol = data_parts[2]
+        config["pending"] = {"step": "granularity", "symbol": symbol}
+        edit_telegram_message(
+            chat_id,
+            message_id,
+            f"➕ Nouvelle alerte\n\n"
+            f"Symbole : {symbol_display_name(symbol)} ✅\n\n"
+            f"2/3 — Choisis l'intervalle :",
+            reply_markup=keyboard_granularities(),
+        )
+        return
+
+    if action == "gran" and len(data_parts) >= 4:
+        if pending.get("step") != "granularity":
+            edit_telegram_message(chat_id, message_id, "⚠️ Session expirée, relance /new.")
+            config["pending"] = None
+            return
+        granularity = int(data_parts[2])
+        label = data_parts[3]
+        config["pending"] = {
+            "step": "ema",
+            "symbol": pending["symbol"],
+            "granularity": granularity,
+            "label": label,
+        }
+        edit_telegram_message(
+            chat_id,
+            message_id,
+            f"➕ Nouvelle alerte\n\n"
+            f"Symbole : {symbol_display_name(pending['symbol'])} ✅\n"
+            f"Intervalle : {label} ✅\n\n"
+            f"3/3 — Choisis l'EMA :",
+            reply_markup=keyboard_emas(),
+        )
+        return
+
+    if action == "ema" and len(data_parts) >= 3:
+        if pending.get("step") != "ema":
+            edit_telegram_message(chat_id, message_id, "⚠️ Session expirée, relance /new.")
+            config["pending"] = None
+            return
+        ema = int(data_parts[2])
+        symbol = pending["symbol"]
+        granularity = pending["granularity"]
+        label = pending["label"]
+        config["pending"] = None
+
+        if alert_already_exists(config, symbol, granularity, ema):
+            edit_telegram_message(
+                chat_id,
+                message_id,
+                "⚠️ Cette alerte existe déjà.\n\n"
+                f"{symbol_display_name(symbol)} • {label} • EMA{ema}",
+            )
+            return
+
+        alert = create_alert(config, symbol, granularity, label, ema)
+        edit_telegram_message(
+            chat_id,
+            message_id,
+            f"✅ Alerte créée !\n\n{format_alert_line(alert)}",
+        )
+
+
+def handle_delete_callback(config, chat_id, message_id, data_parts):
+    if len(data_parts) < 3:
+        return
+    action = data_parts[1]
+    try:
+        alert_id = int(data_parts[2])
+    except ValueError:
+        return
+
+    if action == "cancel":
+        edit_telegram_message(chat_id, message_id, "Suppression annulée.")
+        return
+
+    if action == "confirm":
+        alert = delete_alert(config, alert_id)
+        if alert is None:
+            edit_telegram_message(
+                chat_id, message_id, f"❌ Alerte #{alert_id} introuvable (déjà supprimée ?)."
+            )
+        else:
+            edit_telegram_message(
+                chat_id, message_id, f"🗑️ Alerte supprimée :\n\n{format_alert_line(alert)}"
+            )
+
+
+def handle_callback_query(config, callback_query):
+    callback_id = callback_query["id"]
+    data = callback_query.get("data", "")
+    message = callback_query.get("message", {})
+    chat_id = message.get("chat", {}).get("id")
+    message_id = message.get("message_id")
+
+    if chat_id is None or not is_authorized_chat(chat_id):
+        answer_callback_query(callback_id)
+        return
+
+    answer_callback_query(callback_id)
+
+    data_parts = data.split(":")
+    namespace = data_parts[0] if data_parts else ""
+
+    if namespace == "new":
+        handle_new_alert_callback(config, chat_id, message_id, data_parts)
+    elif namespace == "del":
+        handle_delete_callback(config, chat_id, message_id, data_parts)
+
+
+def process_updates(config):
+    """Lit les messages et boutons Telegram reçus depuis la dernière fois
+    et met à jour la liste d'alertes en conséquence."""
+    updates = get_telegram_updates(config["last_update_id"] + 1)
+
+    for update in updates:
+        config["last_update_id"] = update["update_id"]
+
+        if "callback_query" in update:
+            handle_callback_query(config, update["callback_query"])
+            continue
+
+        message = update.get("message", {})
+        text = (message.get("text") or "").strip()
+        if not text:
+            continue
+
+        chat_id = message.get("chat", {}).get("id", "")
+        if not is_authorized_chat(chat_id):
+            continue
+
+        handle_text_command(config, text)
+
+
+# ===================================================================
+# 6. MODULE DERIV (récupération des bougies)
+# ===================================================================
+
+
+def history_count_for(granularity):
+    # Marge large pour absorber les coupures de marché le week-end (forex).
+    if granularity >= 86400:
+        return 400
+    return 600
+
+
+async def fetch_candles(symbol, granularity, count):
+    async with websockets.connect(DERIV_WS_URL, ping_interval=None) as ws:
+        request = {
+            "ticks_history": symbol,
+            "style": "candles",
+            "granularity": granularity,
+            "count": count,
+            "end": "latest",
+        }
+        await ws.send(json.dumps(request))
+        MAX_WAIT = 30
+        deadline = asyncio.get_event_loop().time() + MAX_WAIT
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError(f"Pas de réponse 'candles' de Deriv après {MAX_WAIT}s")
+            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            data = json.loads(raw)
+            if data.get("msg_type") == "candles":
+                return data["candles"]
+            if data.get("msg_type") == "error":
+                raise RuntimeError(data["error"].get("message", "Erreur Deriv"))
+
+
+# ===================================================================
+# 7. MODULE ETAT (state.json — historique d'alertes déjà envoyées)
+# ===================================================================
+
+
+def state_key_for(alert_id):
+    return f"alert_{alert_id}"
+
+
+def prune_state(config, state):
+    """Supprime du state les clés qui ne correspondent plus à une alerte
+    existante (évite que state.json grossisse indéfiniment)."""
+    valid_keys = {state_key_for(a["id"]) for a in config["alerts"]}
+    for key in list(state.keys()):
+        if key not in valid_keys:
+            state.pop(key, None)
+
+
+# ===================================================================
+# 8. UTILITAIRES (EMA, formatage de date)
+# ===================================================================
+
+
+def compute_ema(closes, period):
+    if len(closes) < period + 1:
+        return None
+    alpha = 2 / (period + 1)
+    ema_val = sum(closes[:period]) / period
+    for c in closes[period:]:
+        ema_val = c * alpha + ema_val * (1 - alpha)
+    return ema_val
+
+
+def format_local_time(epoch_seconds):
+    dt_utc = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+    try:
+        local_dt = dt_utc.astimezone(ZoneInfo(LOCAL_TIMEZONE))
+    except Exception:
+        print(f"[Timezone] Fuseau '{LOCAL_TIMEZONE}' invalide, heure affichée en UTC.")
+        local_dt = dt_utc
+    return local_dt.strftime("%d/%m %H:%M")
+
+
+# ===================================================================
+# 9. MOTEUR DE VERIFICATION DES ALERTES
+# ===================================================================
+
+
+def group_enabled_alerts(config):
+    """Regroupe les alertes actives par (symbole, granularité) afin de ne
+    télécharger les bougies qu'une seule fois par groupe, même si
+    plusieurs EMA différentes sont surveillées sur la même combinaison
+    symbole + intervalle. Les bougies téléchargées une fois sont ensuite
+    réutilisées pour calculer toutes les EMA du groupe."""
+    groups = {}
+    for alert in config["alerts"]:
+        if not alert.get("enabled", True):
+            continue
+        key = (alert["symbol"], alert["granularity"])
+        groups.setdefault(key, []).append(alert)
+    return groups
+
+
+MAX_RETRIES = 3
+
+
+async def check_alert_group(symbol, granularity, label, alerts, state):
+    count = history_count_for(granularity)
+    candles = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            candles = await fetch_candles(symbol, granularity, count)
+            break
+        except Exception as e:
+            err_text = str(e) or type(e).__name__
+            print(f"[{symbol} {label}] Tentative {attempt}/{MAX_RETRIES} échouée : {err_text}")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2 ** attempt)
+    if candles is None:
+        print(f"[{symbol} {label}] Abandon après {MAX_RETRIES} tentatives.")
+        return
+
+    max_period = max(a["ema"] for a in alerts)
+    if len(candles) < max_period + 2:
+        print(f"[{symbol} {label}] Pas assez d'historique pour calculer les EMA.")
+        return
+
+    closed_candles = candles[:-1]
+    last_closed = closed_candles[-1]
+    closes = [float(c["close"]) for c in closed_candles]
+
+    epoch = int(last_closed["epoch"])
+    high = float(last_closed["high"])
+    low = float(last_closed["low"])
+    time_str = format_local_time(epoch)
+
+    # Une seule récupération de bougies pour ce groupe (symbole +
+    # granularité), réutilisée ici pour calculer chaque EMA demandée.
+    for alert in alerts:
+        period = alert["ema"]
+        ema_val = compute_ema(closes, period)
+        if ema_val is None:
+            continue
+
+        touched = low <= ema_val <= high
+        key = state_key_for(alert["id"])
+        already_alerted_epoch = state.get(key)
+
+        if touched and already_alerted_epoch != epoch:
+            msg = (
+                f"🔔 {symbol_display_name(symbol)} ({label}) - {time_str}\n"
+                f"Le prix a touché l'EMA {period} (~{ema_val:.5f})\n"
+                f"Alerte #{alert['id']}"
+            )
+            print(msg)
+            send_telegram(msg)
+            state[key] = epoch
+
+
+async def run_engine(config, state):
+    groups = group_enabled_alerts(config)
+    for (symbol, granularity), alerts in groups.items():
+        label = alerts[0]["label"]
+        await check_alert_group(symbol, granularity, label, alerts, state)
+        await asyncio.sleep(0.3)
+
+
+# ===================================================================
+# 10. BOUCLE PRINCIPALE
+# ===================================================================
+
+
+async def main():
+    config = load_config()
+    state = load_state()
+
+    process_updates(config)
+    save_config(config)          # sauvegarde pending + alertes CRUD immédiatement
+    prune_state(config, state)
+
+    await run_engine(config, state)
+
+    save_state(state)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
