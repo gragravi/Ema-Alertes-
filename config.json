@@ -15,17 +15,19 @@
       "label": "30min",
       "ema": 20,
       "enabled": true
+    },
+    {
+      "id": 3,
+      "symbol": "frxXAUUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 50,
+      "enabled": true
     }
   ],
-  "next_alert_id": 3,
-  "last_update_id": 364729639,
-  "pending": {
-    "step": "ema",
-    "symbol": "frxXAUUSD",
-    "granularity": 1800,
-    "label": "30min",
-    "session_id": "1782759489389"
-  },
+  "next_alert_id": 4,
+  "last_update_id": 364729640,
+  "pending": null,
   "last_heartbeat": 1782744614,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
