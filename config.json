@@ -1,6 +1,8 @@
 {
   "alerts": [],
   "next_alert_id": 1,
-  "last_update_id": 364729621,
-  "pending": null
+  "last_update_id": 364729622,
+  "pending": {
+    "step": "symbol"
+  }
 }
