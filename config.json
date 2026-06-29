@@ -34,11 +34,8 @@
     }
   ],
   "next_alert_id": 5,
-  "last_update_id": 364729651,
-  "pending": {
-    "step": "symbol",
-    "session_id": "1782762808594"
-  },
+  "last_update_id": 364729654,
+  "pending": null,
   "last_heartbeat": 1782744614,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
