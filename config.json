@@ -4,7 +4,8 @@
     "OTC_NDX",
     "frxAUDUSD",
     "frxEURUSD",
-    "cryBTCUSD"
+    "cryBTCUSD",
+    "STPINDEX"
   ],
   "granularity_labels": [
     "30min",
@@ -17,5 +18,5 @@
     50,
     200
   ],
-  "last_update_id": 364729613
+  "last_update_id": 364729614
 }
