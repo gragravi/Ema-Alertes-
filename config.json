@@ -23,17 +23,19 @@
       "label": "30min",
       "ema": 50,
       "enabled": true
+    },
+    {
+      "id": 4,
+      "symbol": "STPINDEX",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
     }
   ],
-  "next_alert_id": 4,
-  "last_update_id": 364729644,
-  "pending": {
-    "step": "ema",
-    "symbol": "STPINDEX",
-    "granularity": 1800,
-    "label": "30min",
-    "session_id": "1782761710446"
-  },
+  "next_alert_id": 5,
+  "last_update_id": 364729645,
+  "pending": null,
   "last_heartbeat": 1782744614,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
