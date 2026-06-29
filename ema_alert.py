@@ -77,19 +77,15 @@ def save_json(path, data):
 
 def load_config():
     config = load_json(CONFIG_FILE, {})
-    config.setdefault("symbols", list(DEFAULT_WATCHLIST))
-    config.setdefault("granularity_labels", list(DEFAULT_GRANULARITY_LABELS))
-    config.setdefault("ema_periods", list(DEFAULT_EMA_PERIODS))
-    config.setdefault("last_update_id", 0)
 
-    # Nettoyage defensif : on ne garde que des granularites/periodes valides,
-    # au cas ou le fichier aurait ete edite a la main de facon incorrecte.
-    config["granularity_labels"] = [
-        lbl for lbl in config["granularity_labels"] if lbl in ALLOWED_GRANULARITIES
-    ] or list(DEFAULT_GRANULARITY_LABELS)
-    config["ema_periods"] = sorted({
-        int(p) for p in config["ema_periods"] if isinstance(p, (int, float)) and int(p) > 1
-    }) or list(DEFAULT_EMA_PERIODS)
+    # Ancien système (conservé temporairement)
+    config.setdefault("symbols", list(DEFAULT_WATCHLIST))
+
+    # Nouveau système
+    config.setdefault("alerts", [])
+    config.setdefault("next_alert_id", 1)
+
+    config.setdefault("last_update_id", 0)
 
     return config
 
