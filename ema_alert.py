@@ -1,5 +1,5 @@
 """
-Bot d'alertes EMA (Deriv + Telegram) — V2
+Bot d'alertes EMA (Deriv + Telegram) — V2 CORRIGÉE
 
 Architecture V2 : chaque alerte est une combinaison indépendante
 (1 symbole + 1 intervalle + 1 EMA). La configuration ne contient plus
@@ -9,7 +9,7 @@ Le fichier est volontairement laissé en un seul script (pour rester
 simple à déployer via GitHub Actions), mais le code est organisé en
 modules logiques clairement séparés par des sections :
 
-    1. CONFIGURATION GENERALE
+    1. CONFIGURATION GENERALE + LOGGING
     2. PERSISTANCE (config.json / state.json)
     3. MODULE TELEGRAM (API bas niveau + claviers à boutons)
     4. MODULE ALERTES (CRUD sur la liste d'alertes)
@@ -19,10 +19,20 @@ modules logiques clairement séparés par des sections :
     8. UTILITAIRES (EMA, formatage de date)
     9. MOTEUR DE VERIFICATION DES ALERTES
    10. BOUCLE PRINCIPALE
+
+CORRECTIONS V2 :
+- Logging structuré (logging module)
+- Validation des secrets au démarrage
+- Validation d'état au chargement
+- Gestion améliorée des erreurs WebSocket
+- Cleanup des IDs d'alerte obsolètes
+- Gestion des symboles invalides
+- Heartbeat configurable
 """
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 import time
@@ -33,8 +43,16 @@ import requests
 import websockets
 
 # ===================================================================
-# 1. CONFIGURATION GENERALE
+# 1. CONFIGURATION GENERALE + LOGGING
 # ===================================================================
+
+# Configuration du logging structuré
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("ema_alert")
 
 DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089")
 DERIV_WS_URL = f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
@@ -111,7 +129,7 @@ def load_json(path, default):
             with open(path) as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"[Persistance] Fichier corrompu {path}, réinitialisation : {e}")
+            logger.error(f"Fichier corrompu {path}, réinitialisation : {e}")
     return default
 
 
@@ -133,6 +151,8 @@ def load_config():
     # appui sur un bouton arrive dans une exécution séparée du script.
     config.setdefault("pending", None)
     config.setdefault("last_heartbeat", 0)
+    config.setdefault("heartbeat_enabled", True)
+    config.setdefault("heartbeat_interval_hours", 24)
     return config
 
 
@@ -141,7 +161,15 @@ def save_config(config):
 
 
 def load_state():
-    return load_json(STATE_FILE, {})
+    """Charge l'état en validant que toutes les entrées sont des epochs valides."""
+    raw_state = load_json(STATE_FILE, {})
+    validated = {}
+    for key, value in raw_state.items():
+        if isinstance(key, str) and key.startswith("alert_") and isinstance(value, int):
+            validated[key] = value
+        else:
+            logger.warning(f"État invalide ignoré : {key} = {value} (type: {type(value).__name__})")
+    return validated
 
 
 def save_state(state):
@@ -155,8 +183,8 @@ def save_state(state):
 
 def send_telegram(text, reply_markup=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[Telegram] TELEGRAM_BOT_TOKEN/CHAT_ID manquant. Message non envoyé:")
-        print(text)
+        logger.warning("TELEGRAM_BOT_TOKEN/CHAT_ID manquant. Message non envoyé:")
+        logger.warning(text)
         return None
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
@@ -166,11 +194,11 @@ def send_telegram(text, reply_markup=None):
         r = requests.post(url, data=payload, timeout=10)
         data = r.json()
         if not data.get("ok"):
-            print("[Telegram] Erreur d'envoi:", r.text)
+            logger.error(f"Erreur d'envoi Telegram: {r.text}")
             return None
         return data["result"]
     except Exception as e:
-        print("[Telegram] Exception sendMessage:", e)
+        logger.error(f"Exception sendMessage: {e}")
         return None
 
 
@@ -184,9 +212,9 @@ def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     try:
         r = requests.post(url, data=payload, timeout=10)
         if not r.json().get("ok"):
-            print("[Telegram] Erreur editMessageText:", r.text)
+            logger.error(f"Erreur editMessageText: {r.text}")
     except Exception as e:
-        print("[Telegram] Exception editMessageText:", e)
+        logger.error(f"Exception editMessageText: {e}")
 
 
 def answer_callback_query(callback_query_id, text=None):
@@ -199,7 +227,7 @@ def answer_callback_query(callback_query_id, text=None):
     try:
         requests.post(url, data=payload, timeout=10)
     except Exception as e:
-        print("[Telegram] Exception answerCallbackQuery:", e)
+        logger.error(f"Exception answerCallbackQuery: {e}")
 
 
 def get_telegram_updates(offset):
@@ -220,7 +248,7 @@ def get_telegram_updates(offset):
         if data.get("ok"):
             return data.get("result", [])
     except Exception as e:
-        print("[Telegram] Erreur getUpdates:", e)
+        logger.error(f"Erreur getUpdates: {e}")
     return []
 
 
@@ -320,7 +348,7 @@ def create_alert(config, symbol, granularity, label, ema):
         alert dict si créée avec succès, None sinon
     """
     if len(config["alerts"]) >= MAX_ALERTS:
-        print(f"[Alertes] Limite atteinte : {MAX_ALERTS} alertes max")
+        logger.error(f"Limite atteinte : {MAX_ALERTS} alertes max")
         return None
     if alert_already_exists(config, symbol, granularity, ema):
         return None
@@ -383,7 +411,7 @@ def is_authorized_chat(chat_id):
         # Pas de chat_id configuré -> on ne peut authentifier personne,
         # donc on ignore toute commande par sécurité (au lieu de les
         # accepter de n'importe qui).
-        print("[Telegram] TELEGRAM_CHAT_ID non configuré, commande ignorée par sécurité.")
+        logger.warning("TELEGRAM_CHAT_ID non configuré, commande ignorée par sécurité.")
         return False
     return str(chat_id) == str(TELEGRAM_CHAT_ID)
 
@@ -499,7 +527,7 @@ def handle_new_alert_callback(config, chat_id, message_id, data_parts):
         try:
             symbol = validate_symbol(data_parts[2])
         except ValueError as e:
-            print(f"[Validation] {e}")
+            logger.warning(f"Validation symbole échouée: {e}")
             edit_telegram_message(chat_id, message_id, "❌ Symbole invalide, relance /new.")
             config["pending"] = None
             return
@@ -665,27 +693,44 @@ def history_count_for(granularity):
 
 
 async def fetch_candles(symbol, granularity, count):
-    async with websockets.connect(DERIV_WS_URL, ping_interval=None) as ws:
-        request = {
-            "ticks_history": symbol,
-            "style": "candles",
-            "granularity": granularity,
-            "count": count,
-            "end": "latest",
-        }
-        await ws.send(json.dumps(request))
-        MAX_WAIT = 30
-        deadline = asyncio.get_event_loop().time() + MAX_WAIT
-        while True:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                raise TimeoutError(f"Pas de réponse 'candles' de Deriv après {MAX_WAIT}s")
-            raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
-            data = json.loads(raw)
-            if data.get("msg_type") == "candles":
-                return data["candles"]
-            if data.get("msg_type") == "error":
-                raise RuntimeError(data["error"].get("message", "Erreur Deriv"))
+    """Récupère les bougies de Deriv avec gestion robuste des erreurs.
+    
+    Args:
+        symbol: Code Deriv du symbole
+        granularity: Intervalle en secondes
+        count: Nombre de bougies à récupérer
+        
+    Returns:
+        Liste des bougies
+        
+    Raises:
+        TimeoutError si aucune réponse après MAX_WAIT secondes
+        RuntimeError si Deriv retourne une erreur
+    """
+    MAX_WAIT = 30
+    try:
+        async with websockets.connect(DERIV_WS_URL, ping_interval=None) as ws:
+            request = {
+                "ticks_history": symbol,
+                "style": "candles",
+                "granularity": granularity,
+                "count": count,
+                "end": "latest",
+            }
+            await ws.send(json.dumps(request))
+            
+            while True:
+                raw = await asyncio.wait_for(ws.recv(), timeout=MAX_WAIT)
+                data = json.loads(raw)
+                if data.get("msg_type") == "candles":
+                    return data["candles"]
+                if data.get("msg_type") == "error":
+                    raise RuntimeError(data["error"].get("message", "Erreur Deriv inconnue"))
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Pas de réponse 'candles' de Deriv après {MAX_WAIT}s")
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des bougies : {e}")
+        raise
 
 
 # ===================================================================
@@ -710,6 +755,18 @@ def state_key_for(alert_id):
     return f"alert_{alert_id}"
 
 
+def cleanup_old_alert_ids(config):
+    """Réinitialise next_alert_id en fonction des IDs réellement utilisés.
+    Évite que next_alert_id croisse indéfiniment lors de suppressions d'alertes."""
+    if not config["alerts"]:
+        config["next_alert_id"] = 1
+        logger.info("Aucune alerte, reset next_alert_id à 1")
+    else:
+        max_id = max(a["id"] for a in config["alerts"])
+        config["next_alert_id"] = max_id + 1
+        logger.info(f"next_alert_id réajusté à {config['next_alert_id']}")
+
+
 def prune_state(config, state):
     """Supprime du state les clés qui ne correspondent plus à une alerte
     existante (évite que state.json grossisse indéfiniment) et affiche les logs."""
@@ -718,7 +775,9 @@ def prune_state(config, state):
     
     for key in deleted_keys:
         state.pop(key, None)
-        print(f"[State] Clé supprimée (alerte inexistante) : {key}")
+        logger.info(f"État supprimé (alerte inexistante) : {key}")
+    
+    cleanup_old_alert_ids(config)
 
 
 # ===================================================================
@@ -727,6 +786,15 @@ def prune_state(config, state):
 
 
 def compute_ema(closes, period):
+    """Calcule l'EMA (Exponential Moving Average).
+    
+    Args:
+        closes: Liste des prix de fermeture
+        period: Période EMA
+        
+    Returns:
+        Valeur EMA ou None si impossible à calculer
+    """
     if len(closes) < period + 1:
         return None
     alpha = 2 / (period + 1)
@@ -746,14 +814,14 @@ def format_local_time(epoch_seconds):
         String au format "JJ/MM HH:MM"
         
     Raises:
-        Exception si le fuseau horaire est invalide (échoue explicitement)
+        Exception si le fuseau horaire est invalide
     """
     dt_utc = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
     try:
         local_dt = dt_utc.astimezone(ZoneInfo(LOCAL_TIMEZONE))
     except Exception as e:
-        print(f"[Timezone] ❌ ERREUR : Fuseau '{LOCAL_TIMEZONE}' invalide. {e}")
-        print(f"[Timezone] Utilisez un fuseau IANA valide (ex: 'Europe/Paris', 'UTC')")
+        logger.error(f"❌ ERREUR : Fuseau '{LOCAL_TIMEZONE}' invalide. {e}")
+        logger.error(f"ℹ️ Utilisez un fuseau IANA valide (ex: 'Europe/Paris', 'UTC')")
         raise
     return local_dt.strftime("%d/%m %H:%M")
 
@@ -782,29 +850,41 @@ MAX_RETRIES = 3
 
 
 async def check_alert_group(symbol, granularity, label, alerts, state):
+    """Vérifie un groupe d'alertes (même symbole + granularité).
+    
+    Gère les erreurs de connexion et les symboles invalides.
+    """
     count = history_count_for(granularity)
     candles = None
     
-    print(f"[CHECK] Symbole: {symbol}, Intervalle: {label}, Alertes: {len(alerts)}")
+    logger.info(f"Vérification: {symbol} ({label}) — {len(alerts)} alerte(s)")
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             candles = await fetch_candles(symbol, granularity, count)
-            print(f"[CHECK] ✅ {len(candles)} bougies récupérées pour {symbol}")
+            logger.info(f"✅ {len(candles)} bougies récupérées pour {symbol}")
             break
+        except RuntimeError as e:
+            # Erreur Deriv (symbole invalide, etc.)
+            logger.error(f"❌ Erreur Deriv (symbole/API) : {symbol} — {e}")
+            # ⚠️ Notifier l'utilisateur que ce symbole est en problème
+            for alert in alerts:
+                msg = f"⚠️ Alerte #{alert['id']} — Symbole {symbol} indisponible chez Deriv.\n\nVérifie config.json ou contacte le support Deriv."
+                send_telegram(msg)
+            return  # Arrêter là, ne pas continuer
         except Exception as e:
             err_text = str(e) or type(e).__name__
-            print(f"[CHECK] ❌ {symbol} {label} — Tentative {attempt}/{MAX_RETRIES} échouée : {err_text}")
+            logger.warning(f"Tentative {attempt}/{MAX_RETRIES} échouée : {symbol} — {err_text}")
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(2 ** attempt)
     
     if candles is None:
-        print(f"[CHECK] ⚠️ {symbol} {label} — Abandon après {MAX_RETRIES} tentatives.")
+        logger.warning(f"Abandon après {MAX_RETRIES} tentatives : {symbol} ({label})")
         return
 
     max_period = max(a["ema"] for a in alerts)
     if len(candles) < max_period + 2:
-        print(f"[CHECK] ⚠️ {symbol} {label} — Pas assez d'historique pour calculer les EMA (besoin: {max_period + 2}, reçu: {len(candles)}).")
+        logger.warning(f"{symbol} ({label}) — Pas assez d'historique pour calculer les EMA (besoin: {max_period + 2}, reçu: {len(candles)}).")
         return
 
     closed_candles = candles[:-1]
@@ -818,7 +898,7 @@ async def check_alert_group(symbol, granularity, label, alerts, state):
     try:
         time_str = format_local_time(epoch)
     except Exception as e:
-        print(f"[CHECK] ⚠️ Erreur formatage heure : {e}, utilisation de l'epoch brut")
+        logger.warning(f"Erreur formatage heure : {e}, utilisation de l'epoch brut")
         time_str = str(epoch)
 
     # Une seule récupération de bougies pour ce groupe (symbole +
@@ -827,7 +907,7 @@ async def check_alert_group(symbol, granularity, label, alerts, state):
         period = alert["ema"]
         ema_val = compute_ema(closes, period)
         if ema_val is None:
-            print(f"[CHECK] Alerte #{alert['id']} : EMA{period} ne peut pas être calculée")
+            logger.warning(f"Alerte #{alert['id']} : EMA{period} ne peut pas être calculée")
             continue
 
         touched = low <= ema_val <= high
@@ -840,20 +920,21 @@ async def check_alert_group(symbol, granularity, label, alerts, state):
                 f"Le prix a touché l'EMA {period} (~{ema_val:.5f})\n"
                 f"Alerte #{alert['id']}"
             )
-            print(f"[ALERT] Envoi notification : {msg}")
+            logger.info(f"Envoi notification : {msg}")
             result = send_telegram(msg)
             
             # ✅ N'enregistrer l'état que si l'envoi Telegram a réussi
             if result is not None:
                 state[key] = epoch
-                print(f"[STATE] ✅ État enregistré pour alerte #{alert['id']} (epoch: {epoch})")
+                logger.info(f"État enregistré pour alerte #{alert['id']} (epoch: {epoch})")
             else:
-                print(f"[STATE] ⚠️ Telegram échoué, état NON enregistré pour alerte #{alert['id']} (retry à la prochaine exécution)")
+                logger.warning(f"Telegram échoué, état NON enregistré pour alerte #{alert['id']} (retry à la prochaine exécution)")
 
 
 async def run_engine(config, state):
+    """Lance le moteur de vérification de toutes les alertes actives."""
     groups = group_enabled_alerts(config)
-    print(f"[ENGINE] Vérification de {len(groups)} groupe(s) d'alertes")
+    logger.info(f"Vérification de {len(groups)} groupe(s) d'alertes")
     for (symbol, granularity), alerts in groups.items():
         label = alerts[0]["label"]
         await check_alert_group(symbol, granularity, label, alerts, state)
@@ -861,12 +942,15 @@ async def run_engine(config, state):
 
 
 def send_heartbeat(config):
-    """Envoie un message de statut quotidien (optionnel)."""
+    """Envoie un message de statut périodique (configurable)."""
+    if not config.get("heartbeat_enabled", True):
+        return
+    
     now = time.time()
     last_heartbeat = config.get("last_heartbeat", 0)
+    interval_seconds = config.get("heartbeat_interval_hours", 24) * 3600
     
-    # Envoyer un heartbeat tous les jours (86400 secondes)
-    if now - last_heartbeat > 86400:
+    if now - last_heartbeat > interval_seconds:
         active_count = len([a for a in config["alerts"] if a.get("enabled", True)])
         total_count = len(config["alerts"])
         heartbeat_msg = (
@@ -878,9 +962,9 @@ def send_heartbeat(config):
         result = send_telegram(heartbeat_msg)
         if result is not None:
             config["last_heartbeat"] = int(now)
-            print(f"[Heartbeat] ✅ Statut quotidien envoyé")
+            logger.info(f"✅ Heartbeat envoyé")
         else:
-            print(f"[Heartbeat] ⚠️ Échec de l'envoi du statut, retry demain")
+            logger.warning(f"❌ Heartbeat échoué, retry plus tard")
 
 
 # ===================================================================
@@ -889,10 +973,25 @@ def send_heartbeat(config):
 
 
 async def main():
+    """Boucle principale du bot."""
     config = load_config()
     state = load_state()
 
-    print("[Main] Démarrage du bot d'alertes EMA")
+    logger.info("=" * 60)
+    logger.info("Démarrage du bot d'alertes EMA V2")
+    logger.info("=" * 60)
+    
+    # ✅ Validation des secrets au démarrage
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("❌ ERREUR : TELEGRAM_BOT_TOKEN non configuré.")
+        logger.error("ℹ️ Ajoute ce secret dans Settings → Secrets and variables → Actions")
+    
+    if not TELEGRAM_CHAT_ID:
+        logger.error("❌ ERREUR : TELEGRAM_CHAT_ID non configuré.")
+        logger.error("ℹ️ Configure-le en suivant les étapes du README")
+    
+    logger.info(f"Config: {len(config['alerts'])} alerte(s) chargée(s)")
+    logger.info(f"State: {len(state)} entrée(s) d'historique chargée(s)")
     
     process_updates(config)
     save_config(config)          # sauvegarde pending + alertes CRUD immédiatement
@@ -900,20 +999,22 @@ async def main():
 
     # ✅ Timeout global : 4 minutes (workflow s'exécute toutes les 5 min)
     try:
-        print("[Main] Lancement du moteur de vérification avec timeout de 240s")
+        logger.info("Lancement du moteur de vérification avec timeout de 240s")
         await asyncio.wait_for(run_engine(config, state), timeout=240)
     except asyncio.TimeoutError:
-        print("[Main] ⚠️ Moteur d'alertes dépassé (>240s), abandon.")
+        logger.warning("⚠️ Moteur d'alertes dépassé (>240s), abandon.")
     except Exception as e:
-        print(f"[Main] ❌ Erreur dans le moteur : {e}")
+        logger.error(f"❌ Erreur dans le moteur : {e}")
 
-    # Envoyer un heartbeat optionnel (1x par jour)
+    # Envoyer un heartbeat optionnel
     send_heartbeat(config)
     
     save_state(state)
     save_config(config)
     
-    print("[Main] Bot terminé")
+    logger.info("=" * 60)
+    logger.info("Bot terminé")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
