@@ -1,9 +1,6 @@
 {
   "alerts": [],
   "next_alert_id": 1,
-  "last_update_id": 364729619,
-  "pending": {
-    "step": "granularity",
-    "symbol": "frxXAUUSD"
-  }
+  "last_update_id": 364729621,
+  "pending": null
 }
