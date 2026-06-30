@@ -50,9 +50,10 @@
     }
   ],
   "next_alert_id": 7,
-  "last_update_id": 364729686,
+  "last_update_id": 364729687,
   "pending": {
-    "step": "symbol",
+    "step": "granularity",
+    "symbol": "BOOM1000",
     "session_id": "1782823690162"
   },
   "last_heartbeat": 1782744614,
