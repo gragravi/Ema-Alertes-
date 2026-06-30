@@ -39,17 +39,19 @@
       "label": "30min",
       "ema": 20,
       "enabled": true
+    },
+    {
+      "id": 6,
+      "symbol": "BOOM1000",
+      "granularity": 3600,
+      "label": "1h",
+      "ema": 20,
+      "enabled": true
     }
   ],
-  "next_alert_id": 6,
-  "last_update_id": 364729684,
-  "pending": {
-    "step": "ema",
-    "symbol": "BOOM1000",
-    "granularity": 3600,
-    "label": "1h",
-    "session_id": "1782823450393"
-  },
+  "next_alert_id": 7,
+  "last_update_id": 364729685,
+  "pending": null,
   "last_heartbeat": 1782744614,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
