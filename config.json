@@ -90,9 +90,10 @@
     }
   ],
   "next_alert_id": 12,
-  "last_update_id": 364729716,
+  "last_update_id": 364729717,
   "pending": {
-    "step": "symbol",
+    "step": "granularity",
+    "symbol": "frxXAUUSD",
     "session_id": "1783068550013"
   },
   "last_heartbeat": 1783003900,
