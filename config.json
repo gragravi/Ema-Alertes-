@@ -33,14 +33,6 @@
       "enabled": true
     },
     {
-      "id": 6,
-      "symbol": "BOOM1000",
-      "granularity": 3600,
-      "label": "1h",
-      "ema": 20,
-      "enabled": true
-    },
-    {
       "id": 7,
       "symbol": "BOOM1000",
       "granularity": 3600,
@@ -90,7 +82,7 @@
     }
   ],
   "next_alert_id": 13,
-  "last_update_id": 364729724,
+  "last_update_id": 364729726,
   "pending": null,
   "last_heartbeat": 1783090359,
   "heartbeat_enabled": true,
