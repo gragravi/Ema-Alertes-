@@ -54,7 +54,7 @@
       "granularity": 1800,
       "label": "30min",
       "ema": 50,
-      "enabled": true
+      "enabled": false
     },
     {
       "id": 11,
@@ -82,7 +82,7 @@
     }
   ],
   "next_alert_id": 14,
-  "last_update_id": 364729740,
+  "last_update_id": 364729741,
   "pending": null,
   "last_heartbeat": 1783090359,
   "heartbeat_enabled": true,
