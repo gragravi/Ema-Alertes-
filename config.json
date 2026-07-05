@@ -122,10 +122,12 @@
     }
   ],
   "next_alert_id": 20,
-  "last_update_id": 364729782,
+  "last_update_id": 364729783,
   "pending": {
-    "step": "granularity",
+    "step": "ema",
     "symbol": "cryBTCUSD",
+    "granularity": 1800,
+    "label": "30min",
     "session_id": "1783246215212"
   },
   "last_heartbeat": 1783176810,
