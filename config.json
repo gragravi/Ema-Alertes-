@@ -127,17 +127,19 @@
       "label": "30min",
       "ema": 20,
       "enabled": true
+    },
+    {
+      "id": 21,
+      "symbol": "cryBTCUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 50,
+      "enabled": true
     }
   ],
-  "next_alert_id": 21,
-  "last_update_id": 364729787,
-  "pending": {
-    "step": "ema",
-    "symbol": "cryBTCUSD",
-    "granularity": 1800,
-    "label": "30min",
-    "session_id": "1783246449409"
-  },
+  "next_alert_id": 22,
+  "last_update_id": 364729788,
+  "pending": null,
   "last_heartbeat": 1783176810,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
