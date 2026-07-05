@@ -1,0 +1,7 @@
+# Versions verrouillées pour des déploiements reproductibles (GitHub Actions
+# réinstalle les dépendances à chaque exécution du workflow, toutes les
+# 5 minutes : une release cassée en amont impacterait le bot immédiatement).
+# Pense à relever ces versions périodiquement (ex: dependabot ou manuellement
+# tous les quelques mois) pour profiter des correctifs de sécurité.
+websockets==12.0
+requests==2.31.0
