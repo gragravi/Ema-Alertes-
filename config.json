@@ -113,14 +113,6 @@
       "enabled": true
     },
     {
-      "id": 22,
-      "symbol": "R_75",
-      "granularity": 600,
-      "label": "10min",
-      "ema": 20,
-      "enabled": true
-    },
-    {
       "id": 23,
       "symbol": "R_75",
       "granularity": 14400,
@@ -130,7 +122,7 @@
     }
   ],
   "next_alert_id": 24,
-  "last_update_id": 364729811,
+  "last_update_id": 364729812,
   "pending": null,
   "last_heartbeat": 1783263220,
   "heartbeat_enabled": true,
