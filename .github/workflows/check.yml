@@ -10,7 +10,6 @@ permissions:
 
 concurrency:
   group: ema-alert-bot
-  cancel-in-progress: true
 
 jobs:
   check:
@@ -67,4 +66,3 @@ jobs:
           
           echo "❌ Impossible de commiter/pusher après 3 tentatives"
           exit 1
-          
