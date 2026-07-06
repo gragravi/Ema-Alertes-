@@ -1,0 +1,70 @@
+name: EMA Touch Alert
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ema-alert-bot
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installer les dependances
+        run: pip install -r requirements.txt
+
+      - name: Verifier les EMA et alerter si besoin
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python ema_alert.py
+
+      - name: Sauvegarder l'etat et la config avec retry (evite les alertes en double)
+        run: |
+          git config user.name "ema-bot"
+          git config user.email "ema-bot@users.noreply.github.com"
+          
+          for i in {1..3}; do
+            echo "📝 Tentative $i/3 de commit/push..."
+            
+            git add state.json config.json
+            
+            if git diff --cached --quiet; then
+              echo "✅ Aucun changement à commiter"
+              exit 0
+            fi
+            
+            if git commit -m "Update state [skip ci]"; then
+              if git push; then
+                echo "✅ Push réussi à la tentative $i/3"
+                exit 0
+              else
+                echo "⚠️ Push échoué à la tentative $i/3"
+              fi
+            else
+              echo "⚠️ Commit échoué à la tentative $i/3"
+            fi
+            
+            if [ $i -lt 3 ]; then
+              echo "🔄 Rebase et nouvelle tentative..."
+              git reset --hard HEAD
+              git pull --rebase
+            fi
+          done
+          
+          echo "❌ Impossible de commiter/pusher après 3 tentatives"
+          exit 1
+          
