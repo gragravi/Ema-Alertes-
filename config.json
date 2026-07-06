@@ -122,10 +122,10 @@
     }
   ],
   "next_alert_id": 26,
-  "last_update_id": 364729842,
+  "last_update_id": 364729843,
   "pending": {
     "step": "symbol",
-    "session_id": "1783345221233"
+    "session_id": "1783348754151"
   },
   "last_heartbeat": 1783263220,
   "heartbeat_enabled": true,
