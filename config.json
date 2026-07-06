@@ -130,9 +130,10 @@
     }
   ],
   "next_alert_id": 25,
-  "last_update_id": 364729818,
+  "last_update_id": 364729819,
   "pending": {
-    "step": "symbol",
+    "step": "granularity",
+    "symbol": "R_25_1S",
     "session_id": "1783328832187"
   },
   "last_heartbeat": 1783263220,
