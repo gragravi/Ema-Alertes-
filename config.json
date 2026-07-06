@@ -1,0 +1,149 @@
+{
+  "alerts": [
+    {
+      "id": 1,
+      "symbol": "frxXAUUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "symbol": "frxEURUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 3,
+      "symbol": "frxXAUUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 4,
+      "symbol": "OTC_NDX",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 11,
+      "symbol": "frxXAUUSD",
+      "granularity": 600,
+      "label": "10min",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 12,
+      "symbol": "frxXAUUSD",
+      "granularity": 600,
+      "label": "10min",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 14,
+      "symbol": "R_10",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 15,
+      "symbol": "R_10",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 16,
+      "symbol": "R_25",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 17,
+      "symbol": "R_25",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 18,
+      "symbol": "R_50",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 19,
+      "symbol": "R_50",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 20,
+      "symbol": "cryBTCUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 21,
+      "symbol": "cryBTCUSD",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 23,
+      "symbol": "R_75",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
+    },
+    {
+      "id": 24,
+      "symbol": "R_75",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 50,
+      "enabled": true
+    },
+    {
+      "id": 25,
+      "symbol": "1HZ25V",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
+    }
+  ],
+  "next_alert_id": 26,
+  "last_update_id": 364729832,
+  "pending": {
+    "step": "symbol",
+    "session_id": "1783345221233"
+  },
+  "last_heartbeat": 1783263220,
+  "heartbeat_enabled": true,
+  "heartbeat_interval_hours": 24
+}
