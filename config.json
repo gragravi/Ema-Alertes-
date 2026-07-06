@@ -33,14 +33,6 @@
       "enabled": true
     },
     {
-      "id": 11,
-      "symbol": "frxXAUUSD",
-      "granularity": 600,
-      "label": "10min",
-      "ema": 20,
-      "enabled": true
-    },
-    {
       "id": 12,
       "symbol": "frxXAUUSD",
       "granularity": 600,
@@ -138,7 +130,7 @@
     }
   ],
   "next_alert_id": 26,
-  "last_update_id": 364729837,
+  "last_update_id": 364729838,
   "pending": {
     "step": "symbol",
     "session_id": "1783345221233"
