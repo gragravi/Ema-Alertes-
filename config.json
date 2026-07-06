@@ -143,17 +143,19 @@
       "label": "10min",
       "ema": 20,
       "enabled": true
+    },
+    {
+      "id": 23,
+      "symbol": "R_75",
+      "granularity": 14400,
+      "label": "4h",
+      "ema": 20,
+      "enabled": true
     }
   ],
-  "next_alert_id": 23,
-  "last_update_id": 364729803,
-  "pending": {
-    "step": "ema",
-    "symbol": "R_75",
-    "granularity": 14400,
-    "label": "4h",
-    "session_id": "1783327816057"
-  },
+  "next_alert_id": 24,
+  "last_update_id": 364729804,
+  "pending": null,
   "last_heartbeat": 1783263220,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
