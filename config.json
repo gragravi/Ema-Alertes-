@@ -135,17 +135,19 @@
       "label": "4h",
       "ema": 50,
       "enabled": true
+    },
+    {
+      "id": 28,
+      "symbol": "OTC_NDX",
+      "granularity": 1800,
+      "label": "30min",
+      "ema": 50,
+      "enabled": true
     }
   ],
-  "next_alert_id": 28,
-  "last_update_id": 364729857,
-  "pending": {
-    "step": "ema",
-    "symbol": "OTC_NDX",
-    "granularity": 1800,
-    "label": "30min",
-    "session_id": "1783673770166"
-  },
+  "next_alert_id": 29,
+  "last_update_id": 364729858,
+  "pending": null,
   "last_heartbeat": 1783608930,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
