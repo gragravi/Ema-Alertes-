@@ -138,10 +138,12 @@
     }
   ],
   "next_alert_id": 28,
-  "last_update_id": 364729856,
+  "last_update_id": 364729857,
   "pending": {
-    "step": "granularity",
+    "step": "ema",
     "symbol": "OTC_NDX",
+    "granularity": 1800,
+    "label": "30min",
     "session_id": "1783673770166"
   },
   "last_heartbeat": 1783608930,
