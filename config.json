@@ -164,7 +164,7 @@
   "next_alert_id": 33,
   "last_update_id": 364729882,
   "pending": null,
-  "last_heartbeat": 1785491496,
+  "last_heartbeat": 1785577896,
   "heartbeat_enabled": true,
   "heartbeat_interval_hours": 24
 }
